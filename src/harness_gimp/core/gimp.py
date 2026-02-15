@@ -38,6 +38,10 @@ def _profile_dir() -> Path:
     return path
 
 
+def resolve_profile_dir() -> Path:
+    return _profile_dir()
+
+
 def run_python_batch(
     code: str,
     timeout_seconds: float = 180.0,

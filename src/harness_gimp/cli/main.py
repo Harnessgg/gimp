@@ -40,8 +40,13 @@ def _fail(command: str, code: str, message: str, retryable: bool = False) -> Non
 
 
 def _bridge_state_dir() -> Path:
-    root = Path(os.getenv("LOCALAPPDATA", str(Path.home())))
-    state_dir = root / "harness-gimp"
+    configured = os.getenv("HARNESS_GIMP_STATE_DIR")
+    if configured:
+        state_dir = Path(configured)
+    elif os.getenv("USERPROFILE"):
+        state_dir = Path(os.environ["USERPROFILE"]) / ".harness-gimp"
+    else:
+        state_dir = Path.home() / ".harness-gimp"
     state_dir.mkdir(parents=True, exist_ok=True)
     return state_dir
 
@@ -50,8 +55,24 @@ def _bridge_pid_file() -> Path:
     return _bridge_state_dir() / "bridge.pid"
 
 
+def _bridge_url_file() -> Path:
+    return _bridge_state_dir() / "bridge.url"
+
+
+def _resolve_bridge_url() -> str:
+    env_url = os.getenv("HARNESS_GIMP_BRIDGE_URL")
+    if env_url:
+        return env_url
+    url_file = _bridge_url_file()
+    if url_file.exists():
+        saved_url = url_file.read_text(encoding="utf-8").strip()
+        if saved_url:
+            return saved_url
+    return "http://127.0.0.1:41749"
+
+
 def _bridge_client() -> BridgeClient:
-    return BridgeClient()
+    return BridgeClient(_resolve_bridge_url())
 
 
 def _call_bridge(command: str, method: str, params: Dict[str, Any], timeout_seconds: float = 30) -> Dict[str, Any]:
@@ -77,11 +98,15 @@ def bridge_serve(host: str = typer.Option("127.0.0.1", "--host"), port: int = ty
 @bridge_app.command("start")
 def bridge_start(host: str = typer.Option("127.0.0.1", "--host"), port: int = typer.Option(41749, "--port")) -> None:
     pid_file = _bridge_pid_file()
+    url_file = _bridge_url_file()
+    bridge_url = f"http://{host}:{port}"
     if pid_file.exists():
         try:
             pid = int(pid_file.read_text(encoding="utf-8").strip())
             os.kill(pid, 0)
-            _ok("bridge.start", {"status": "already-running", "pid": pid, "host": host, "port": port})
+            if not url_file.exists():
+                url_file.write_text(bridge_url, encoding="utf-8")
+            _ok("bridge.start", {"status": "already-running", "pid": pid, "host": host, "port": port, "url": bridge_url})
             return
         except Exception:
             pid_file.unlink(missing_ok=True)
@@ -89,21 +114,25 @@ def bridge_start(host: str = typer.Option("127.0.0.1", "--host"), port: int = ty
     creationflags = 0
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    child_env = os.environ.copy()
+    child_env["HARNESS_GIMP_BRIDGE_URL"] = bridge_url
     process = subprocess.Popen(
         [sys.executable, "-m", "harness_gimp", "bridge", "serve", "--host", host, "--port", str(port)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=creationflags,
+        env=child_env,
     )
     pid_file.write_text(str(process.pid), encoding="utf-8")
-    os.environ["HARNESS_GIMP_BRIDGE_URL"] = f"http://{host}:{port}"
+    url_file.write_text(bridge_url, encoding="utf-8")
+    os.environ["HARNESS_GIMP_BRIDGE_URL"] = bridge_url
 
     for _ in range(30):
         time.sleep(0.1)
         try:
-            status = BridgeClient(f"http://{host}:{port}").health()
+            status = BridgeClient(bridge_url).health()
             if status.get("ok"):
-                _ok("bridge.start", {"status": "started", "pid": process.pid, "host": host, "port": port})
+                _ok("bridge.start", {"status": "started", "pid": process.pid, "host": host, "port": port, "url": bridge_url})
                 return
         except BridgeClientError:
             continue
@@ -113,6 +142,7 @@ def bridge_start(host: str = typer.Option("127.0.0.1", "--host"), port: int = ty
 @bridge_app.command("stop")
 def bridge_stop() -> None:
     pid_file = _bridge_pid_file()
+    url_file = _bridge_url_file()
     if not pid_file.exists():
         _ok("bridge.stop", {"status": "not-running"})
         return
@@ -120,6 +150,7 @@ def bridge_stop() -> None:
     try:
         os.kill(pid, signal.SIGTERM)
         pid_file.unlink(missing_ok=True)
+        url_file.unlink(missing_ok=True)
         _ok("bridge.stop", {"status": "stopped", "pid": pid})
     except Exception as exc:
         _fail("bridge.stop", "ERROR", str(exc))
@@ -197,8 +228,8 @@ def actions() -> None:
 
 
 @app.command("doctor")
-def doctor() -> None:
-    _ok("doctor", _call_bridge("doctor", "system.doctor", {}, timeout_seconds=30))
+def doctor(verbose: bool = typer.Option(False, "--verbose")) -> None:
+    _ok("doctor", _call_bridge("doctor", "system.doctor", {"verbose": verbose}, timeout_seconds=30))
 
 
 @app.command("inspect")
@@ -313,6 +344,25 @@ def crop_image(
     )
 
 
+@app.command("crop-center")
+def crop_center_image(
+    image: Path,
+    width: int = typer.Option(..., "--width"),
+    height: int = typer.Option(..., "--height"),
+    output: Optional[Path] = typer.Option(None, "--output"),
+) -> None:
+    _ensure_bridge_ready("crop-center")
+    _ok(
+        "crop-center",
+        _call_bridge(
+            "crop-center",
+            "image.crop_center",
+            {"image": str(image), "width": width, "height": height, "output": str(output) if output else str(image)},
+            timeout_seconds=300,
+        ),
+    )
+
+
 @app.command("rotate")
 def rotate_image(
     image: Path,
@@ -371,6 +421,46 @@ def canvas_size(
                 "offsetX": offset_x,
                 "offsetY": offset_y,
                 "output": str(output) if output else str(image),
+            },
+            timeout_seconds=300,
+        ),
+    )
+
+
+@app.command("montage-grid")
+def montage_grid(
+    images_json: str = typer.Option(..., "--images-json"),
+    rows: int = typer.Option(..., "--rows"),
+    cols: int = typer.Option(..., "--cols"),
+    tile_width: int = typer.Option(..., "--tile-width"),
+    tile_height: int = typer.Option(..., "--tile-height"),
+    output: Path = typer.Option(..., "--output"),
+    gutter: int = typer.Option(0, "--gutter"),
+    background: str = typer.Option("#000000", "--background"),
+    fit_mode: str = typer.Option("cover", "--fit-mode"),
+) -> None:
+    _ensure_bridge_ready("montage-grid")
+    try:
+        images = json.loads(images_json)
+    except json.JSONDecodeError as exc:
+        _fail("montage-grid", "INVALID_INPUT", f"Invalid JSON: {exc}")
+    if not isinstance(images, list):
+        _fail("montage-grid", "INVALID_INPUT", "images-json must be a JSON list of file paths")
+    _ok(
+        "montage-grid",
+        _call_bridge(
+            "montage-grid",
+            "image.montage_grid",
+            {
+                "images": images,
+                "rows": rows,
+                "cols": cols,
+                "tileWidth": tile_width,
+                "tileHeight": tile_height,
+                "gutter": gutter,
+                "background": background,
+                "fitMode": fit_mode,
+                "output": str(output),
             },
             timeout_seconds=300,
         ),

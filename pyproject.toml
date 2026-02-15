@@ -22,13 +22,14 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Multimedia :: Graphics :: Editors"
 ]
-dependencies = ["typer>=0.12.5"]
+dependencies = ["typer>=0.12.5", "Pillow>=10.0.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3.0", "ruff>=0.8.0", "build>=1.2.1", "twine>=5.1.1"]
 
 [project.scripts]
 harness-gimp = "harness_gimp.cli.main:main"
+harnessgg-gimp = "harness_gimp.cli.main:main"
 
 [tool.setuptools]
 include-package-data = true

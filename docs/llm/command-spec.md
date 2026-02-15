@@ -19,7 +19,8 @@ Reference: `docs/human/commands.md`
 
 Agent-relevant commands:
 - Project safety: `inspect`, `validate`, `diff`, `snapshot`, `undo`, `redo`, `clone-project`
-- Core transforms: `resize`, `crop`, `rotate`, `flip`, `canvas-size`
+- Core transforms: `resize`, `crop`, `crop-center`, `rotate`, `flip`, `canvas-size`
+- Composition: `montage-grid`
 - Adjustments: `brightness-contrast`, `levels`, `curves`, `hue-saturation`, `color-balance`, `color-temperature`, `invert`, `desaturate`
 - Filters: `blur`, `gaussian-blur`, `sharpen`, `unsharp-mask`, `noise-reduction`
 - Layers: `layer-list`, `layer-add`, `layer-remove`, `layer-rename`, `layer-opacity`, `layer-blend-mode`, `layer-duplicate`, `layer-merge-down`, `layer-reorder`

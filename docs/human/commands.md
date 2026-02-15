@@ -7,10 +7,11 @@
 - `harness-gimp bridge status`
 - `harness-gimp bridge verify [--iterations <int>] [--max-failures <int>]`
 - `harness-gimp bridge soak [--iterations <int>] [--action <method>] [--action-params-json <json>]`
+  Note: `bridge start` persists the selected URL/port for later commands unless `HARNESS_GIMP_BRIDGE_URL` is set. Use `HARNESS_GIMP_STATE_DIR` to override state-file location.
 
 ## System
 - `harness-gimp actions`
-- `harness-gimp doctor`
+- `harness-gimp doctor [--verbose]`
 - `harness-gimp version`
 - `harness-gimp plan-edit <image> <action> [--params-json <json>]`
 
@@ -18,6 +19,7 @@
 - `harness-gimp open <image>`
 - `harness-gimp save <image> <output>`
 - `harness-gimp export <image> <output>`
+- `harness-gimp montage-grid --images-json <json-list> --rows <int> --cols <int> --tile-width <int> --tile-height <int> --output <path> [--gutter <int>] [--background <hex>] [--fit-mode cover|contain]`
 - `harness-gimp clone-project <source> <target> [--overwrite]`
 - `harness-gimp inspect <image>`
 - `harness-gimp validate <image>`
@@ -29,6 +31,7 @@
 ## Transform
 - `harness-gimp resize <image> --width <int> --height <int> [--output <path>]`
 - `harness-gimp crop <image> --x <int> --y <int> --width <int> --height <int> [--output <path>]`
+- `harness-gimp crop-center <image> --width <int> --height <int> [--output <path>]`
 - `harness-gimp rotate <image> --degrees <90|180|270> [--output <path>]`
 - `harness-gimp flip <image> --axis horizontal|vertical [--output <path>]`
 - `harness-gimp canvas-size <image> --width <int> --height <int> [--offset-x <int>] [--offset-y <int>] [--output <path>]`

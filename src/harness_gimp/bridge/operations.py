@@ -1,14 +1,16 @@
 import json
 import hashlib
+import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
 from harness_gimp import __version__
-from harness_gimp.core.gimp import GimpExecutionError, resolve_gimp_binary, run_python_batch
+from harness_gimp.core.gimp import GimpExecutionError, resolve_gimp_binary, resolve_profile_dir, run_python_batch
 
 
 class BridgeOperationError(Exception):
@@ -36,9 +38,11 @@ ACTION_METHODS = [
     "image.clone",
     "image.resize",
     "image.crop",
+    "image.crop_center",
     "image.rotate",
     "image.flip",
     "image.canvas_size",
+    "image.montage_grid",
     "image.export",
     "adjust.brightness_contrast",
     "adjust.levels",
@@ -785,6 +789,95 @@ def _output_or_input(params: Dict[str, Any], image: str) -> str:
     return str(Path(params.get("output") or image))
 
 
+def _montage_grid(params: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        from PIL import Image, ImageColor, ImageOps
+    except Exception as exc:
+        raise BridgeOperationError("ERROR", "Pillow is required for image.montage_grid") from exc
+
+    images = params.get("images")
+    if not isinstance(images, list) or not images:
+        raise BridgeOperationError("INVALID_INPUT", "images must be a non-empty list of file paths")
+    image_paths = [_require_path(str(p)) for p in images]
+
+    rows = int(params.get("rows", 0))
+    cols = int(params.get("cols", 0))
+    if rows <= 0 or cols <= 0:
+        raise BridgeOperationError("INVALID_INPUT", "rows and cols must be > 0")
+    if len(image_paths) != rows * cols:
+        raise BridgeOperationError("INVALID_INPUT", "images length must equal rows * cols")
+
+    tile_w = int(params.get("tileWidth", 0))
+    tile_h = int(params.get("tileHeight", 0))
+    if tile_w <= 0 or tile_h <= 0:
+        raise BridgeOperationError("INVALID_INPUT", "tileWidth and tileHeight must be > 0")
+
+    gutter = int(params.get("gutter", 0))
+    if gutter < 0:
+        raise BridgeOperationError("INVALID_INPUT", "gutter must be >= 0")
+
+    fit_mode = str(params.get("fitMode", "cover")).strip().lower()
+    if fit_mode not in {"cover", "contain"}:
+        raise BridgeOperationError("INVALID_INPUT", "fitMode must be cover or contain")
+
+    output = Path(str(params.get("output", "")).strip())
+    if not str(output):
+        raise BridgeOperationError("INVALID_INPUT", "output is required")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        bg_rgb = ImageColor.getrgb(str(params.get("background", "#000000")))
+    except Exception as exc:
+        raise BridgeOperationError("INVALID_INPUT", "background must be a valid CSS hex color") from exc
+
+    canvas_w = cols * tile_w + (cols - 1) * gutter
+    canvas_h = rows * tile_h + (rows - 1) * gutter
+    canvas = Image.new("RGB", (canvas_w, canvas_h), bg_rgb)
+
+    for i, source_path in enumerate(image_paths):
+        src = Image.open(source_path).convert("RGB")
+        if fit_mode == "cover":
+            tile = ImageOps.fit(src, (tile_w, tile_h), method=Image.Resampling.LANCZOS)
+        else:
+            tile = src.copy()
+            tile.thumbnail((tile_w, tile_h), resample=Image.Resampling.LANCZOS)
+            fitted = Image.new("RGB", (tile_w, tile_h), bg_rgb)
+            fitted.paste(tile, ((tile_w - tile.width) // 2, (tile_h - tile.height) // 2))
+            tile = fitted
+
+        r = i // cols
+        c = i % cols
+        x = c * (tile_w + gutter)
+        y = r * (tile_h + gutter)
+        canvas.paste(tile, (x, y))
+
+    canvas.save(output)
+    return {
+        "output": str(output),
+        "rows": rows,
+        "cols": cols,
+        "tileWidth": tile_w,
+        "tileHeight": tile_h,
+        "gutter": gutter,
+    }
+
+
+def _exif_orientation(path: Path) -> int | None:
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        with Image.open(path) as image:
+            exif = image.getexif()
+            if not exif:
+                return None
+            value = exif.get(274)
+            return int(value) if value else None
+    except Exception:
+        return None
+
+
 def _layer_index(params: Dict[str, Any], default: int = -1) -> int:
     raw = params.get("layerIndex", params.get("layerId", default))
     try:
@@ -870,18 +963,31 @@ def handle_method(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if method == "system.actions":
         return {"actions": ACTION_METHODS}
     if method == "system.doctor":
+        verbose = bool(params.get("verbose", False))
+        bridge_url_env = os.getenv("HARNESS_GIMP_BRIDGE_URL")
+        bridge_url = bridge_url_env or "http://127.0.0.1:41749"
         try:
             gimp_bin = resolve_gimp_binary()
         except GimpExecutionError as exc:
             return {"healthy": False, "issues": [str(exc)]}
         proc = subprocess.run([str(gimp_bin), "--version"], capture_output=True, text=True, timeout=15)
-        return {
+        data = {
             "healthy": proc.returncode == 0,
             "gimpBinary": str(gimp_bin),
             "gimpVersionRaw": (proc.stdout or proc.stderr).strip(),
             "issues": [] if proc.returncode == 0 else ["Unable to run gimp --version"],
             "nonFatalWarningsSuppressed": True,
         }
+        if verbose:
+            data["runtime"] = {
+                "pythonExecutable": sys.executable,
+                "modulePath": str(Path(__file__).resolve()),
+                "bridgeUrl": bridge_url,
+                "bridgeUrlSource": "HARNESS_GIMP_BRIDGE_URL" if bridge_url_env else "default",
+                "gimpProfileDir": str(resolve_profile_dir()),
+                "invocationHint": "Prefer `harness-gimp` or `harnessgg-gimp` over `python -m harness_gimp` to reduce module collision risk.",
+            }
+        return data
     if method == "system.soak":
         iterations = int(params.get("iterations", 100))
         action = str(params.get("action", "system.health"))
@@ -903,9 +1009,11 @@ def handle_method(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         method_map = {
             "resize": "image.resize",
             "crop": "image.crop",
+            "crop-center": "image.crop_center",
             "rotate": "image.rotate",
             "flip": "image.flip",
             "canvas-size": "image.canvas_size",
+            "montage-grid": "image.montage_grid",
             "brightness-contrast": "adjust.brightness_contrast",
             "levels": "adjust.levels",
             "curves": "adjust.curves",
@@ -965,7 +1073,11 @@ def handle_method(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         return {"source": str(source), "target": str(target)}
     if method == "image.inspect":
         image = str(_require_path(str(params.get("image", ""))))
-        return _run_action("inspect", {"image": image}, timeout_seconds=180)
+        data = _run_action("inspect", {"image": image}, timeout_seconds=180)
+        exif_orientation = _exif_orientation(Path(image))
+        data["exifOrientation"] = exif_orientation
+        data["orientationWarning"] = bool(exif_orientation and exif_orientation != 1)
+        return data
     if method == "image.validate":
         image = str(_require_path(str(params.get("image", ""))))
         data = _run_action("inspect", {"image": image}, timeout_seconds=180)
@@ -1019,6 +1131,24 @@ def handle_method(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
                 "output": _output_or_input(params, image),
             },
         )
+    if method == "image.crop_center":
+        image = str(_require_path(str(params.get("image", ""))))
+        _maybe_auto_snapshot(Path(image), params, "crop-center")
+        width = int(params.get("width", 0))
+        height = int(params.get("height", 0))
+        if width <= 0 or height <= 0:
+            raise BridgeOperationError("INVALID_INPUT", "width and height must be > 0")
+        inspect = _run_action("inspect", {"image": image}, timeout_seconds=180)
+        src_w = int(inspect["width"])
+        src_h = int(inspect["height"])
+        if width > src_w or height > src_h:
+            raise BridgeOperationError("INVALID_INPUT", "crop size cannot exceed source dimensions")
+        x = int((src_w - width) // 2)
+        y = int((src_h - height) // 2)
+        return _run_action(
+            "crop",
+            {"image": image, "width": width, "height": height, "x": x, "y": y, "output": _output_or_input(params, image)},
+        )
     if method == "image.rotate":
         image = str(_require_path(str(params.get("image", ""))))
         _maybe_auto_snapshot(Path(image), params, "rotate")
@@ -1057,6 +1187,8 @@ def handle_method(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if not output:
             raise BridgeOperationError("INVALID_INPUT", "output is required")
         return _run_action("export", {"image": image, "output": output})
+    if method == "image.montage_grid":
+        return _montage_grid(params)
     if method == "adjust.brightness_contrast":
         image = str(_require_path(str(params.get("image", ""))))
         _maybe_auto_snapshot(Path(image), params, "brightness-contrast")

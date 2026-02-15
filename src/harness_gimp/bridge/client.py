@@ -1,7 +1,7 @@
 import json
 import os
 from typing import Any, Dict
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -21,6 +21,8 @@ class BridgeClient:
         try:
             with urlopen(req, timeout=5) as response:
                 return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            raise BridgeClientError("BRIDGE_HTTP_ERROR", f"HTTP {exc.code} on /health") from exc
         except URLError as exc:
             raise BridgeClientError("BRIDGE_UNAVAILABLE", str(exc)) from exc
 
@@ -35,6 +37,16 @@ class BridgeClient:
         try:
             with urlopen(req, timeout=timeout_seconds) as response:
                 body = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            payload_raw = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            try:
+                payload = json.loads(payload_raw) if payload_raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            err = payload.get("error") if isinstance(payload, dict) else None
+            if isinstance(err, dict) and "code" in err:
+                raise BridgeClientError(str(err.get("code", "ERROR")), str(err.get("message", "bridge error"))) from exc
+            raise BridgeClientError("BRIDGE_HTTP_ERROR", f"HTTP {exc.code}: {payload_raw[:200]}") from exc
         except URLError as exc:
             raise BridgeClientError("BRIDGE_UNAVAILABLE", str(exc)) from exc
         except Exception as exc:
