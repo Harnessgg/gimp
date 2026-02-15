@@ -1,0 +1,10 @@
+PROTOCOL_VERSION = "1.0"
+
+ERROR_CODES = {
+    "OK": 0,
+    "ERROR": 1,
+    "NOT_FOUND": 2,
+    "VALIDATION_FAILED": 3,
+    "INVALID_INPUT": 4,
+    "BRIDGE_UNAVAILABLE": 5,
+}

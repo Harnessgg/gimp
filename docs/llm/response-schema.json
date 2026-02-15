@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "harness-gimp-response",
+  "type": "object",
+  "required": ["ok", "protocolVersion", "command"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "protocolVersion": { "type": "string", "const": "1.0" },
+    "command": { "type": "string" },
+    "data": { "type": "object" },
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "ok": { "const": true } } }, "then": { "required": ["data"] } },
+    { "if": { "properties": { "ok": { "const": false } } }, "then": { "required": ["error"] } }
+  ],
+  "additionalProperties": false
+}

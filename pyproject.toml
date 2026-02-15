@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harnessgg-gimp"
+version = "0.1.0"
+description = "Agent-first harness for GIMP image editing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "harnessgg" }]
+keywords = ["gimp", "image-editing", "ai-agent", "automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Graphics :: Editors"
+]
+dependencies = ["typer>=0.12.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0", "ruff>=0.8.0", "build>=1.2.1", "twine>=5.1.1"]
+
+[project.scripts]
+harness-gimp = "harness_gimp.cli.main:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
